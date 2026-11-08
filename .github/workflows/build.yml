@@ -1,6 +1,7 @@
 name: Build
 
-# Builds the Zig that zig-build pins (https://codeberg.org/emanspeaks/zig-build)
+# Builds the Zig that zig-build pins (https://github.com/randyos-org/zig-build,
+# the mirror of https://codeberg.org/emanspeaks/zig-build)
 # natively on each GitHub-hosted runner in targets.json, with zig-build's own
 # scripts: build-stage3.sh bootstraps from the upstream devkit for that host.
 # Each build is smoke-tested on its runner, and every host's build of one
@@ -40,7 +41,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZIG_BUILD_URL: https://codeberg.org/emanspeaks/zig-build.git
+  # the GitHub mirror of https://codeberg.org/emanspeaks/zig-build, its source
+  ZIG_BUILD_URL: https://github.com/randyos-org/zig-build.git
   # the builds move between machines, so they must run on any CPU of their arch
   ZIG_HOST_CPU: baseline
   STAGE3_TESTS: 0
@@ -220,7 +222,7 @@ jobs:
           else
             m=${manifests[0]}
             jq -r '"Zig `\(.zig_version)`, built by " +
-              "[zig-build `\(.zig_build_commit[0:12])`](https://codeberg.org/emanspeaks/zig-build/src/commit/\(.zig_build_commit)) " +
+              "[zig-build `\(.zig_build_commit[0:12])`](https://github.com/randyos-org/zig-build/commit/\(.zig_build_commit)) " +
               "(zig-src `\(.zig_src_commit[0:12])`) natively on GitHub-hosted runners, one archive per host, each smoke-tested there.\n\n" +
               "Install it in a workflow with `uses: randyos-org/zig-toolchain/setup@main`. " +
               "Each `manifest-<host>.json` lists that build'"'"'s inputs."' "$m" > notes.md

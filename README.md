@@ -1,6 +1,6 @@
 # zig-toolchain
 
-Builds of the Zig that [zig-build](https://codeberg.org/emanspeaks/zig-build) pins, for the GitHub-hosted runners, so other projects' CI can test with it without building Zig themselves.
+Builds of the Zig that [zig-build](https://github.com/randyos-org/zig-build) (a mirror of its source on [Codeberg](https://codeberg.org/emanspeaks/zig-build)) pins, for the GitHub-hosted runners, so other projects' CI can test with it without building Zig themselves.
 
 ## Using it
 
@@ -10,7 +10,7 @@ Builds of the Zig that [zig-build](https://codeberg.org/emanspeaks/zig-build) pi
     version: latest   # or a version as `zig version` prints it
 ```
 
-The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.version`. It supports these runners:
+The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.version`. It supports these runners (not Intel macOS: upstream publishes no `x86_64-macos` devkit to bootstrap from, so that host would need zig-build's cross pipeline):
 
 | Host | Runner |
 | --- | --- |
@@ -18,7 +18,6 @@ The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.ver
 | `aarch64-linux-musl` | `ubuntu-24.04-arm` |
 | `x86_64-windows-gnu` | `windows-2025` |
 | `aarch64-windows-gnu` | `windows-11-arm` |
-| `x86_64-macos-none` | `macos-15-intel` |
 | `aarch64-macos-none` | `macos-15` |
 
 ## How it is built
