@@ -74,7 +74,8 @@ jobs:
             for tag in $(gh release list -R "$GITHUB_REPOSITORY" -L 10 --json tagName -q '.[].tagName | select(startswith("zig-"))'); do
               gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'manifest-*.json' -D "manifests/$tag" >/dev/null 2>&1 || true
             done
-            cat manifests/*/*.json 2>/dev/null | jq -r '.host_key // empty' | sort -u
+            # (none before the first release)
+            cat manifests/*/*.json 2>/dev/null | jq -r '.host_key // empty' | sort -u || true
           )
           hosts='[]'
           while IFS= read -r row; do
