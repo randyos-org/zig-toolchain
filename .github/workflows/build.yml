@@ -19,6 +19,10 @@ name: Build
 #   publish  the archives and their manifests as release zig-<version>
 
 on:
+  # a push builds what its commit changes (unchanged keys skip), and shows as
+  # the commit's check
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       zig_build_ref:
