@@ -1,0 +1,228 @@
+name: Build
+
+# Builds the Zig that zig-build pins (https://codeberg.org/emanspeaks/zig-build)
+# natively on each GitHub-hosted runner in targets.json, with zig-build's own
+# scripts: build-stage3.sh bootstraps from the upstream devkit for that host.
+# Each build is smoke-tested on its runner, and every host's build of one
+# version goes into one release, `zig-<version>`, which setup/action.yml
+# installs. All build logic lives in zig-build; this workflow only schedules it
+# and publishes.
+#
+# A host builds only when no recent release holds its key (cross-manifest.sh's
+# host key: the zig-src pin, the devkit, the host triple and CPU, and the stage
+# scripts), so unchanged inputs never rebuild.
+#
+# Jobs:
+#   prepare  resolve the zig-build commit; the hosts whose key is unreleased
+#   build    stage3 on each such host's own runner, smoke test, package
+#   publish  the archives and their manifests as release zig-<version>
+
+on:
+  workflow_dispatch:
+    inputs:
+      zig_build_ref:
+        description: zig-build branch, tag or commit to build from
+        type: string
+        default: main
+      force:
+        description: Build every host even if its key is already released
+        type: boolean
+        default: false
+  # Daily, once a run started by hand has passed on every host:
+  # schedule:
+  #   - cron: '0 7 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  ZIG_BUILD_URL: https://codeberg.org/emanspeaks/zig-build.git
+  # the builds move between machines, so they must run on any CPU of their arch
+  ZIG_HOST_CPU: baseline
+  STAGE3_TESTS: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      zig_build_commit: ${{ steps.hosts.outputs.zig_build_commit }}
+      hosts: ${{ steps.hosts.outputs.hosts }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out zig-build
+        run: bash .github/scripts/clone-zig-build.sh "${{ inputs.zig_build_ref || 'main' }}"
+
+      - name: Work out the hosts to build
+        id: hosts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          echo "zig_build_commit=$(git -C zig-build rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # the host keys the latest releases hold, one per host's manifest
+          released=$(
+            for tag in $(gh release list -R "$GITHUB_REPOSITORY" -L 10 --json tagName -q '.[].tagName | select(startswith("zig-"))'); do
+              gh release download "$tag" -R "$GITHUB_REPOSITORY" -p 'manifest-*.json' -D "manifests/$tag" >/dev/null 2>&1 || true
+            done
+            cat manifests/*/*.json 2>/dev/null | jq -r '.host_key // empty' | sort -u
+          )
+          hosts='[]'
+          while IFS= read -r row; do
+            target=$(jq -r .target <<< "$row")
+            key=$(cd zig-build && ZIG_HOST_TARGET=$target bash ./cross-manifest.sh key host)
+            [ -n "$key" ] || { echo "::error::empty host key for $target"; exit 1; }
+            if [ "$FORCE" != true ] && grep -qx "$key" <<< "$released"; then
+              echo "$target: $key is released"
+              continue
+            fi
+            echo "$target: building ($key)"
+            hosts=$(jq -c --argjson row "$row" --arg key "$key" '. + [$row + {host_key: $key}]' <<< "$hosts")
+          done < <(jq -c '.[]' targets.json)
+          echo "hosts=$hosts" >> "$GITHUB_OUTPUT"
+          [ "$hosts" = '[]' ] && echo "::notice::every host's key is released; nothing to build"
+          true
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: prepare
+    if: needs.prepare.outputs.hosts != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.hosts) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 355
+    env:
+      ZIG_HOST_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/local/.ghcup /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+            /usr/local/julia* /usr/lib/jvm /usr/share/miniconda
+          df -h /
+
+      # as checked in, so the scripts hash as they did in prepare
+      - name: Check out zig-build
+        run: |
+          git config --global core.autocrlf false
+          bash .github/scripts/clone-zig-build.sh "${{ needs.prepare.outputs.zig_build_commit }}"
+
+      - name: Fetch zig-src
+        working-directory: zig-build
+        run: bash ./ci-sources.sh
+
+      - name: Check the host key
+        working-directory: zig-build
+        env:
+          WANT: ${{ matrix.host_key }}
+        run: |
+          # the manifest records prepare's key, which decides what is built;
+          # a differing key here means the runner sees other inputs
+          got=$(bash ./cross-manifest.sh key host)
+          [ "$got" = "$WANT" ] || echo "::warning::host key $got on the runner, $WANT in prepare"
+
+      - name: Build stage3
+        working-directory: zig-build
+        run: bash ./build-stage3.sh
+
+      # zig-build's test-zig-cross.sh, run natively: the build runs, and it
+      # builds and runs a Zig and a C hello world for its own host
+      - name: Smoke test
+        run: |
+          zig=$PWD/zig-build/bin/stage3/bin/zig
+          t=$RUNNER_TEMP/smoke
+          mkdir -p "$t"
+          export ZIG_GLOBAL_CACHE_DIR=$t/global-cache ZIG_LOCAL_CACHE_DIR=$t/local-cache
+          set -x
+          "$zig" version
+          printf 'const std = @import("std");\npub fn main() void {\n    std.debug.print("hello from zig\\n", .{});\n}\n' > "$t/hello.zig"
+          "$zig" build-exe "$t/hello.zig" -femit-bin="$t/hello-zig"
+          "$t/hello-zig" 2>&1 | grep -q "hello from zig"
+          printf '#include <stdio.h>\nint main(void) { puts("hello from c"); return 0; }\n' > "$t/hello.c"
+          "$zig" cc "$t/hello.c" -o "$t/hello-c"
+          "$t/hello-c" | grep -q "hello from c"
+
+      - name: Package
+        env:
+          HOST_KEY: ${{ matrix.host_key }}
+          ZIG_BUILD_COMMIT: ${{ needs.prepare.outputs.zig_build_commit }}
+        run: |
+          version=$(zig-build/bin/stage3/bin/zig version)
+          name="zig-$ZIG_HOST_TARGET-$ZIG_HOST_CPU-$version"
+          mkdir -p dist
+          cp -R zig-build/bin/stage3 "$name"
+          # .zip on Windows and .tar.xz elsewhere, as upstream ships Zig
+          if [ "$RUNNER_OS" = Windows ]; then
+            archive=$name.zip
+            7z a -tzip -bso0 "dist/$archive" "$name"
+          else
+            archive=$name.tar.xz
+            tar -cJf "dist/$archive" "$name"
+          fi
+          jq -n --arg target "$ZIG_HOST_TARGET" --arg cpu "$ZIG_HOST_CPU" --arg version "$version" \
+            --arg host_key "$HOST_KEY" --arg zig_build_commit "$ZIG_BUILD_COMMIT" \
+            --arg zig_src_commit "$(git -C zig-build/zig-src rev-parse HEAD)" \
+            --arg archive "$archive" \
+            '{target: $target, cpu: $cpu, zig_version: $version, host_key: $host_key,
+              zig_build_commit: $zig_build_commit, zig_src_commit: $zig_src_commit, archive: $archive}' \
+            > "dist/manifest-$ZIG_HOST_TARGET.json"
+          cat "dist/manifest-$ZIG_HOST_TARGET.json"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zig-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    # what built publishes, even if another host failed
+    if: ${{ !cancelled() && needs.prepare.outputs.hosts != '[]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: zig-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          manifests=(dist/manifest-*.json)
+          [ ${#manifests[@]} -gt 0 ] || { echo "::error::no host built"; exit 1; }
+          versions=$(jq -r .zig_version "${manifests[@]}" | sort -u)
+          [ "$(wc -l <<< "$versions")" = 1 ] || { echo "::error::hosts built different versions: $versions"; exit 1; }
+          version=$versions
+          tag="zig-$version"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # another run built this version for other hosts (or this is a forced rebuild)
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber dist/*
+          else
+            m=${manifests[0]}
+            jq -r '"Zig `\(.zig_version)`, built by " +
+              "[zig-build `\(.zig_build_commit[0:12])`](https://codeberg.org/emanspeaks/zig-build/src/commit/\(.zig_build_commit)) " +
+              "(zig-src `\(.zig_src_commit[0:12])`) natively on GitHub-hosted runners, one archive per host, each smoke-tested there.\n\n" +
+              "Install it in a workflow with `uses: randyos-org/zig-toolchain/setup@main`. " +
+              "Each `manifest-<host>.json` lists that build'"'"'s inputs."' "$m" > notes.md
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "Zig $version" --notes-file notes.md --latest dist/*
+          fi
+          gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'

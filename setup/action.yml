@@ -1,0 +1,72 @@
+name: Set up Zig (zig-toolchain)
+description: Install a Zig built by randyos-org/zig-toolchain for this runner, and put it on PATH.
+inputs:
+  version:
+    description: Zig version to install (as `zig version` prints it), or `latest` for the newest release
+    required: false
+    default: latest
+  repository:
+    description: The repository whose releases hold the builds
+    required: false
+    default: randyos-org/zig-toolchain
+  token:
+    description: Token for the GitHub API (release lookups)
+    required: false
+    default: ${{ github.token }}
+outputs:
+  version:
+    description: The installed Zig's version
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: Install Zig
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ inputs.repository }}
+        WANT: ${{ inputs.version }}
+        OS: ${{ runner.os }}
+        ARCH: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+        case "$OS-$ARCH" in
+          Linux-X64) host=x86_64-linux-musl ;;
+          Linux-ARM64) host=aarch64-linux-musl ;;
+          Windows-X64) host=x86_64-windows-gnu ;;
+          Windows-ARM64) host=aarch64-windows-gnu ;;
+          macOS-X64) host=x86_64-macos-none ;;
+          macOS-ARM64) host=aarch64-macos-none ;;
+          *) echo "::error::no zig-toolchain build for $OS $ARCH"; exit 1 ;;
+        esac
+        if [ "$WANT" = latest ]; then
+          # the newest release with a build for this host
+          tag=""
+          for t in $(gh release list -R "$REPO" -L 20 --json tagName -q '.[].tagName | select(startswith("zig-"))'); do
+            if gh release view "$t" -R "$REPO" --json assets -q '.assets[].name' | grep -q "^manifest-$host\.json$"; then
+              tag=$t
+              break
+            fi
+          done
+          [ -n "$tag" ] || { echo "::error::no release of $REPO has a build for $host"; exit 1; }
+        else
+          tag="zig-$WANT"
+        fi
+        dir=$RUNNER_TEMP/zig-toolchain
+        rm -rf "$dir"
+        mkdir -p "$dir"
+        gh release download "$tag" -R "$REPO" -p "manifest-$host.json" -D "$dir"
+        archive=$(jq -r .archive "$dir/manifest-$host.json")
+        gh release download "$tag" -R "$REPO" -p "$archive" -D "$dir"
+        case "$archive" in
+          *.zip) 7z x -bso0 -o"$dir" "$dir/$archive" ;;
+          *) tar -xJf "$dir/$archive" -C "$dir" ;;
+        esac
+        bin=$dir/${archive%.zip}
+        bin=${bin%.tar.xz}/bin
+        if [ "$OS" = Windows ]; then bin=$(cygpath -w "$bin"); fi
+        echo "$bin" >> "$GITHUB_PATH"
+        version=$(jq -r .zig_version "$dir/manifest-$host.json")
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Zig $version ($host) from $REPO $tag" >> "$GITHUB_STEP_SUMMARY"
