@@ -17,7 +17,7 @@ The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.ver
 | `x86_64-linux-musl` | `ubuntu-24.04` |
 | `aarch64-linux-musl` | `ubuntu-24.04-arm` |
 | `x86_64-windows-gnu` | `windows-2025` |
-| `aarch64-windows-gnu` | `windows-11-arm` |
+| `aarch64-windows-gnu` | `windows-11-arm` (not built yet: `zig2` does not link there, see `targets.json`) |
 | `aarch64-macos-none` | `macos-15` |
 
 ## How it is built

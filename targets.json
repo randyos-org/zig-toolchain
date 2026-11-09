@@ -1,7 +1,7 @@
 [
   { "target": "x86_64-linux-musl", "runner": "ubuntu-24.04" },
-  { "target": "aarch64-linux-musl", "runner": "ubuntu-24.04-arm" },
+  { "target": "aarch64-linux-musl", "runner": "ubuntu-24.04-arm", "args": "-j2" },
   { "target": "x86_64-windows-gnu", "runner": "windows-2025" },
-  { "target": "aarch64-windows-gnu", "runner": "windows-11-arm", "no_pkg_config": true },
-  { "target": "aarch64-macos-none", "runner": "macos-15", "maxrss": 7000000000 }
+  { "target": "aarch64-windows-gnu", "runner": "windows-11-arm", "no_pkg_config": true, "skip": "zig2 does not link: lld-link: undefined symbol: zig_windows_peb (zig.h has none for aarch64 Windows)" },
+  { "target": "aarch64-macos-none", "runner": "macos-15", "args": "--maxrss 8000000000" }
 ]

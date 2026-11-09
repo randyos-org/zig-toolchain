@@ -86,6 +86,11 @@ jobs:
           hosts='[]'
           while IFS= read -r row; do
             target=$(jq -r .target <<< "$row")
+            skip=$(jq -r '.skip // empty' <<< "$row")
+            if [ -n "$skip" ]; then
+              echo "::notice::$target: skipped ($skip)"
+              continue
+            fi
             key=$(cd zig-build && ZIG_HOST_TARGET=$target bash ./cross-manifest.sh key host)
             [ -n "$key" ] || { echo "::error::empty host key for $target"; exit 1; }
             if [ "$FORCE" != true ] && grep -qx "$key" <<< "$released"; then
@@ -143,21 +148,22 @@ jobs:
           [ "$got" = "$WANT" ] || echo "::warning::host key $got on the runner, $WANT in prepare"
 
       # A host's quirks from targets.json:
-      #   maxrss         passed as --maxrss to both zig builds (build-stage3.sh
-      #                  forwards its arguments), for a runner with less memory
-      #                  than Zig's build declares (8 GB; macos-15 has 7)
+      #   args           passed to both zig builds (build-stage3.sh forwards its
+      #                  arguments): `--maxrss 8000000000` where the runner has
+      #                  less memory than Zig's build declares (macos-15 has 7 GB),
+      #                  `-j2` where full parallelism runs it out of memory
       #   no_pkg_config  a PKG_CONFIG that does not exist, so Zig's build skips
       #                  pkg-config (windows-11-arm's Strawberry Perl one is broken)
+      #   skip           the reason a host is not built for now (prepare)
       - name: Build stage3
         working-directory: zig-build
         env:
-          MAXRSS: ${{ matrix.maxrss }}
+          ARGS: ${{ matrix.args }}
           NO_PKG_CONFIG: ${{ matrix.no_pkg_config }}
         run: |
-          args=()
-          [ -n "$MAXRSS" ] && args+=(--maxrss "$MAXRSS")
           [ "$NO_PKG_CONFIG" = true ] && export PKG_CONFIG=no-pkg-config
-          bash ./build-stage3.sh "${args[@]}"
+          # ARGS splits into words on purpose
+          bash ./build-stage3.sh $ARGS
 
       # zig-build's test-zig-cross.sh, run natively: the build runs, and it
       # builds and runs a Zig and a C hello world for its own host
