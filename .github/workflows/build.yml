@@ -154,13 +154,18 @@ jobs:
       #                  `-j2` where full parallelism runs it out of memory
       #   no_pkg_config  a PKG_CONFIG that does not exist, so Zig's build skips
       #                  pkg-config (windows-11-arm's Strawberry Perl one is broken)
+      #   direct         stage3 from the devkit's zig, without the C bootstrap
+      #                  (scripts/build-stage3-direct.sh), where zig2 does not link
       #   skip           the reason a host is not built for now (prepare)
       - name: Build stage3
         working-directory: zig-build
         env:
           ARGS: ${{ matrix.args }}
           NO_PKG_CONFIG: ${{ matrix.no_pkg_config }}
+          DIRECT: ${{ matrix.direct }}
         run: |
+          build=./build-stage3.sh
+          [ "$DIRECT" = true ] && build=../.github/scripts/build-stage3-direct.sh
           [ "$NO_PKG_CONFIG" = true ] && export PKG_CONFIG=no-pkg-config
           # memory every 30 s on Linux, to tell a runner killed for memory
           # from one lost otherwise; and 16 GB of swap, as macOS has its own:
@@ -172,7 +177,7 @@ jobs:
             (while sleep 30; do echo "mem: $(free -m | awk 'NR==2 {print $3 " MB used, " $7 " MB available"}')"; done) &
           fi
           # ARGS splits into words on purpose
-          bash ./build-stage3.sh $ARGS
+          bash "$build" $ARGS
 
       # zig-build's test-zig-cross.sh, run natively: the build runs, and it
       # builds and runs a Zig and a C hello world for its own host
@@ -194,6 +199,7 @@ jobs:
       - name: Package
         env:
           HOST_KEY: ${{ matrix.host_key }}
+          DIRECT: ${{ matrix.direct }}
           ZIG_BUILD_COMMIT: ${{ needs.prepare.outputs.zig_build_commit }}
         run: |
           version=$(zig-build/bin/stage3/bin/zig version)
@@ -211,9 +217,10 @@ jobs:
           jq -n --arg target "$ZIG_HOST_TARGET" --arg cpu "$ZIG_HOST_CPU" --arg version "$version" \
             --arg host_key "$HOST_KEY" --arg zig_build_commit "$ZIG_BUILD_COMMIT" \
             --arg zig_src_commit "$(git -C zig-build/zig-src rev-parse HEAD)" \
-            --arg archive "$archive" \
+            --arg archive "$archive" --arg bootstrap "$([ "$DIRECT" = true ] && echo devkit-zig || echo zig2)" \
             '{target: $target, cpu: $cpu, zig_version: $version, host_key: $host_key,
-              zig_build_commit: $zig_build_commit, zig_src_commit: $zig_src_commit, archive: $archive}' \
+              zig_build_commit: $zig_build_commit, zig_src_commit: $zig_src_commit, archive: $archive,
+              bootstrap: $bootstrap}' \
             > "dist/manifest-$ZIG_HOST_TARGET.json"
           cat "dist/manifest-$ZIG_HOST_TARGET.json"
           ls -l dist
