@@ -162,6 +162,11 @@ jobs:
           NO_PKG_CONFIG: ${{ matrix.no_pkg_config }}
         run: |
           [ "$NO_PKG_CONFIG" = true ] && export PKG_CONFIG=no-pkg-config
+          # memory every 30 s on Linux, to tell a runner killed for memory
+          # from one lost otherwise
+          if [ "$RUNNER_OS" = Linux ]; then
+            (while sleep 30; do echo "mem: $(free -m | awk 'NR==2 {print $3 " MB used, " $7 " MB available"}')"; done) &
+          fi
           # ARGS splits into words on purpose
           bash ./build-stage3.sh $ARGS
 
