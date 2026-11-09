@@ -2,6 +2,6 @@
   { "target": "x86_64-linux-musl", "runner": "ubuntu-24.04" },
   { "target": "aarch64-linux-musl", "runner": "ubuntu-24.04-arm", "args": "-j2" },
   { "target": "x86_64-windows-gnu", "runner": "windows-2025" },
-  { "target": "aarch64-windows-gnu", "runner": "windows-11-arm", "no_pkg_config": true, "direct": true, "skip": "zig2 does not link (rstd#262), and the devkit zig (0.18.0-dev.92) is too old to build zig-src directly" },
+  { "target": "aarch64-windows-gnu", "runner": "windows-11-arm", "cross_from": "x86_64-windows-gnu" },
   { "target": "aarch64-macos-none", "runner": "macos-15", "args": "--maxrss 8000000000" }
 ]

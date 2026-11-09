@@ -4,10 +4,13 @@ name: Build
 # the mirror of https://codeberg.org/emanspeaks/zig-build)
 # natively on each GitHub-hosted runner in targets.json, with zig-build's own
 # scripts: build-stage3.sh bootstraps from the upstream devkit for that host.
-# Each build is smoke-tested on its runner, and every host's build of one
-# version goes into one release, `zig-<version>`, which setup/action.yml
-# installs. All build logic lives in zig-build; this workflow only schedules it
-# and publishes.
+# Each build is packaged as a Zig install (bin/ and lib/zig: package.sh) and
+# smoke-tested from the package on its runner (smoke.sh), and every host's
+# build of one version goes into one release, `zig-<version>`, which
+# setup/action.yml installs. A host whose own bootstrap fails (`cross_from` in
+# targets.json) is cross-built by another host's stage3 of the same version, and
+# smoke-tested on its own runner. All build logic lives in zig-build; this
+# workflow only schedules it, packages and publishes.
 #
 # A host builds only when no recent release holds its key (cross-manifest.sh's
 # host key: the zig-src pin, the devkit, the host triple and CPU, and the stage
@@ -15,7 +18,9 @@ name: Build
 #
 # Jobs:
 #   prepare  resolve the zig-build commit; the hosts whose key is unreleased
-#   build    stage3 on each such host's own runner, smoke test, package
+#   build    stage3 on each such host's own runner, package, smoke test; and
+#            the cross-built host it serves, if any
+#   smoke    the cross-built hosts' packages, on their own runners
 #   publish  the archives and their manifests as release zig-<version>
 
 on:
@@ -62,6 +67,7 @@ jobs:
     outputs:
       zig_build_commit: ${{ steps.hosts.outputs.zig_build_commit }}
       hosts: ${{ steps.hosts.outputs.hosts }}
+      cross: ${{ steps.hosts.outputs.cross }}
     steps:
       - uses: actions/checkout@v7
 
@@ -83,24 +89,49 @@ jobs:
             # (none before the first release)
             cat manifests/*/*.json 2>/dev/null | jq -r '.host_key // empty' | sort -u || true
           )
-          hosts='[]'
-          while IFS= read -r row; do
-            target=$(jq -r .target <<< "$row")
-            skip=$(jq -r '.skip // empty' <<< "$row")
+          # every host's key and whether it needs building
+          declare -A row key want
+          targets=()
+          while IFS= read -r r; do
+            t=$(jq -r .target <<< "$r")
+            skip=$(jq -r '.skip // empty' <<< "$r")
             if [ -n "$skip" ]; then
-              echo "::notice::$target: skipped ($skip)"
+              echo "::notice::$t: skipped ($skip)"
               continue
             fi
-            key=$(cd zig-build && ZIG_HOST_TARGET=$target bash ./cross-manifest.sh key host)
-            [ -n "$key" ] || { echo "::error::empty host key for $target"; exit 1; }
-            if [ "$FORCE" != true ] && grep -qx "$key" <<< "$released"; then
-              echo "$target: $key is released"
-              continue
+            k=$(cd zig-build && ZIG_HOST_TARGET=$t bash ./cross-manifest.sh key host)
+            [ -n "$k" ] || { echo "::error::empty host key for $t"; exit 1; }
+            row[$t]=$r
+            key[$t]=$k
+            targets+=("$t")
+            if [ "$FORCE" != true ] && grep -qx "$k" <<< "$released"; then
+              want[$t]=false
+              echo "$t: $k is released"
+            else
+              want[$t]=true
+              echo "$t: building ($k)"
             fi
-            echo "$target: building ($key)"
-            hosts=$(jq -c --argjson row "$row" --arg key "$key" '. + [$row + {host_key: $key}]' <<< "$hosts")
           done < <(jq -c '.[]' targets.json)
+          # a native host builds when it, or the host it cross-builds, needs it
+          hosts='[]'
+          cross='[]'
+          for t in "${targets[@]}"; do
+            [ -n "$(jq -r '.cross_from // empty' <<< "${row[$t]}")" ] && continue
+            entry=$(jq -c --arg k "${key[$t]}" --arg self "${want[$t]}" '. + {host_key: $k, self: ($self == "true")}' <<< "${row[$t]}")
+            need=${want[$t]}
+            for c in "${targets[@]}"; do
+              [ "$(jq -r '.cross_from // empty' <<< "${row[$c]}")" = "$t" ] || continue
+              [ "${want[$c]}" = true ] || continue
+              entry=$(jq -c --arg ct "$c" --arg ck "${key[$c]}" '. + {cross_target: $ct, cross_key: $ck}' <<< "$entry")
+              cross=$(jq -c --argjson r "${row[$c]}" --arg k "${key[$c]}" '. + [$r + {host_key: $k}]' <<< "$cross")
+              need=true
+            done
+            if [ "$need" = true ]; then
+              hosts=$(jq -c --argjson e "$entry" '. + [$e]' <<< "$hosts")
+            fi
+          done
           echo "hosts=$hosts" >> "$GITHUB_OUTPUT"
+          echo "cross=$cross" >> "$GITHUB_OUTPUT"
           [ "$hosts" = '[]' ] && echo "::notice::every host's key is released; nothing to build"
           true
 
@@ -154,18 +185,16 @@ jobs:
       #                  `-j2` where full parallelism runs it out of memory
       #   no_pkg_config  a PKG_CONFIG that does not exist, so Zig's build skips
       #                  pkg-config (windows-11-arm's Strawberry Perl one is broken)
-      #   direct         stage3 from the devkit's zig, without the C bootstrap
-      #                  (scripts/build-stage3-direct.sh), where zig2 does not link
+      #   cross_from     the host whose job cross-builds this one with its own
+      #                  stage3, where this host's bootstrap fails; smoke-tested on
+      #                  its own runner (smoke job)
       #   skip           the reason a host is not built for now (prepare)
       - name: Build stage3
         working-directory: zig-build
         env:
           ARGS: ${{ matrix.args }}
           NO_PKG_CONFIG: ${{ matrix.no_pkg_config }}
-          DIRECT: ${{ matrix.direct }}
         run: |
-          build=./build-stage3.sh
-          [ "$DIRECT" = true ] && build=../.github/scripts/build-stage3-direct.sh
           [ "$NO_PKG_CONFIG" = true ] && export PKG_CONFIG=no-pkg-config
           # memory every 30 s on Linux, to tell a runner killed for memory
           # from one lost otherwise; and 16 GB of swap, as macOS has its own:
@@ -177,53 +206,88 @@ jobs:
             (while sleep 30; do echo "mem: $(free -m | awk 'NR==2 {print $3 " MB used, " $7 " MB available"}')"; done) &
           fi
           # ARGS splits into words on purpose
-          bash "$build" $ARGS
-
-      # zig-build's test-zig-cross.sh, run natively: the build runs, and it
-      # builds and runs a Zig and a C hello world for its own host
-      - name: Smoke test
-        run: |
-          zig=$PWD/zig-build/bin/stage3/bin/zig
-          t=$RUNNER_TEMP/smoke
-          mkdir -p "$t"
-          export ZIG_GLOBAL_CACHE_DIR=$t/global-cache ZIG_LOCAL_CACHE_DIR=$t/local-cache
-          set -x
-          "$zig" version
-          printf 'const std = @import("std");\npub fn main() void {\n    std.debug.print("hello from zig\\n", .{});\n}\n' > "$t/hello.zig"
-          "$zig" build-exe "$t/hello.zig" -femit-bin="$t/hello-zig"
-          "$t/hello-zig" 2>&1 | grep -q "hello from zig"
-          printf '#include <stdio.h>\nint main(void) { puts("hello from c"); return 0; }\n' > "$t/hello.c"
-          "$zig" cc "$t/hello.c" -o "$t/hello-c"
-          "$t/hello-c" | grep -q "hello from c"
+          bash ./build-stage3.sh $ARGS
 
       - name: Package
+        id: package
         env:
           HOST_KEY: ${{ matrix.host_key }}
-          DIRECT: ${{ matrix.direct }}
           ZIG_BUILD_COMMIT: ${{ needs.prepare.outputs.zig_build_commit }}
         run: |
           version=$(zig-build/bin/stage3/bin/zig version)
-          name="zig-$ZIG_HOST_TARGET-$ZIG_HOST_CPU-$version"
-          mkdir -p dist
-          cp -R zig-build/bin/stage3 "$name"
-          # .zip on Windows and .tar.xz elsewhere, as upstream ships Zig
-          if [ "$RUNNER_OS" = Windows ]; then
-            archive=$name.zip
-            7z a -tzip -bso0 "dist/$archive" "$name"
-          else
-            archive=$name.tar.xz
-            tar -cJf "dist/$archive" "$name"
-          fi
-          jq -n --arg target "$ZIG_HOST_TARGET" --arg cpu "$ZIG_HOST_CPU" --arg version "$version" \
-            --arg host_key "$HOST_KEY" --arg zig_build_commit "$ZIG_BUILD_COMMIT" \
-            --arg zig_src_commit "$(git -C zig-build/zig-src rev-parse HEAD)" \
-            --arg archive "$archive" --arg bootstrap "$([ "$DIRECT" = true ] && echo devkit-zig || echo zig2)" \
-            '{target: $target, cpu: $cpu, zig_version: $version, host_key: $host_key,
-              zig_build_commit: $zig_build_commit, zig_src_commit: $zig_src_commit, archive: $archive,
-              bootstrap: $bootstrap}' \
-            > "dist/manifest-$ZIG_HOST_TARGET.json"
-          cat "dist/manifest-$ZIG_HOST_TARGET.json"
-          ls -l dist
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          dir=$(bash .github/scripts/package.sh zig-build/bin/stage3 "$ZIG_HOST_TARGET" "$HOST_KEY" zig2 "$version")
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test the package
+        run: bash .github/scripts/smoke.sh "${{ steps.package.outputs.dir }}"
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ matrix.self }}
+        with:
+          name: zig-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+      # The host this one cross-builds: this stage3 (the same zig-src) with that
+      # host's devkit LLVM, as build-stage3.sh's stage 2 does with zig2; the smoke
+      # job tests it on its own runner
+      - name: Cross-build stage3 for ${{ matrix.cross_target }}
+        if: ${{ matrix.cross_target }}
+        working-directory: zig-build
+        env:
+          CROSS_TARGET: ${{ matrix.cross_target }}
+        run: bash ../.github/scripts/build-stage3-cross.sh "$CROSS_TARGET" "$PWD/bin/stage3-$CROSS_TARGET"
+
+      - name: Package ${{ matrix.cross_target }}
+        if: ${{ matrix.cross_target }}
+        env:
+          CROSS_TARGET: ${{ matrix.cross_target }}
+          CROSS_KEY: ${{ matrix.cross_key }}
+          VERSION: ${{ steps.package.outputs.version }}
+          ZIG_BUILD_COMMIT: ${{ needs.prepare.outputs.zig_build_commit }}
+        run: |
+          rm -rf dist
+          bash .github/scripts/package.sh "zig-build/bin/stage3-$CROSS_TARGET" "$CROSS_TARGET" "$CROSS_KEY" "cross from $ZIG_HOST_TARGET" "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ matrix.cross_target }}
+        with:
+          name: cross-${{ matrix.cross_target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  smoke:
+    name: Smoke test (${{ matrix.target }})
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.prepare.outputs.cross != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.cross) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: cross-${{ matrix.target }}
+          path: dist
+
+      - name: Smoke test the package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          archive=$(jq -r .archive "dist/manifest-$TARGET.json")
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          case "$archive" in
+            *.zip) 7z x -bso0 -o"$RUNNER_TEMP/unpacked" "dist/$archive" ;;
+            *) tar -xJf "dist/$archive" -C "$RUNNER_TEMP/unpacked" ;;
+          esac
+          dir=${archive%.zip}
+          bash .github/scripts/smoke.sh "$RUNNER_TEMP/unpacked/${dir%.tar.xz}"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -233,7 +297,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [prepare, build]
+    needs: [prepare, build, smoke]
     # what built publishes, even if another host failed
     if: ${{ !cancelled() && needs.prepare.outputs.hosts != '[]' }}
     runs-on: ubuntu-24.04
@@ -262,7 +326,7 @@ jobs:
             m=${manifests[0]}
             jq -r '"Zig `\(.zig_version)`, built by " +
               "[zig-build `\(.zig_build_commit[0:12])`](https://github.com/randyos-org/zig-build/commit/\(.zig_build_commit)) " +
-              "(zig-src `\(.zig_src_commit[0:12])`) natively on GitHub-hosted runners, one archive per host, each smoke-tested there.\n\n" +
+              "(zig-src `\(.zig_src_commit[0:12])`) on GitHub-hosted runners, one archive per host, each smoke-tested on its own runner.\n\n" +
               "Install it in a workflow with `uses: randyos-org/zig-toolchain/setup@main`. " +
               "Each `manifest-<host>.json` lists that build'"'"'s inputs."' "$m" > notes.md
             gh release create "$tag" -R "$GITHUB_REPOSITORY" --title "Zig $version" --notes-file notes.md --latest dist/*

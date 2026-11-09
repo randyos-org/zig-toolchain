@@ -17,7 +17,7 @@ The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.ver
 | `x86_64-linux-musl` | `ubuntu-24.04` |
 | `aarch64-linux-musl` | `ubuntu-24.04-arm` |
 | `x86_64-windows-gnu` | `windows-2025` |
-| `aarch64-windows-gnu` | `windows-11-arm` (not built yet: `zig2` does not link there, [rstd#262](https://github.com/randyos-org/rstd/issues/262), and the devkit's `zig` is too old to build zig-src itself) |
+| `aarch64-windows-gnu` | `windows-11-arm` (cross-built by the `x86_64-windows-gnu` job: `zig2` does not link there, [rstd#262](https://github.com/randyos-org/rstd/issues/262)) |
 | `aarch64-macos-none` | `macos-15` |
 
 ## How it is built
@@ -26,7 +26,7 @@ The action puts `zig` on `PATH` and gives the version as `steps.<id>.outputs.ver
 
 1. `ci-sources.sh` fetches the pinned zig-src.
 2. `build-stage3.sh` bootstraps a release Zig from the upstream devkit for that host (`baseline` CPU, so it runs on any machine of the architecture).
-3. A smoke test runs `zig version`, then builds and runs a Zig and a C hello world.
+3. `package.sh` makes a Zig install of it, `bin/` with the standard library in `lib/zig`, and a smoke test runs that package outside zig-build's tree: `zig version`, then a Zig and a C hello world. A host whose own bootstrap fails (`cross_from` in `targets.json`) is cross-built by another host's stage3 and smoke-tested on its own runner.
 4. Each version's builds go into one release, `zig-<version>`, with a `manifest-<host>.json` per host listing its inputs.
 
 A host builds only when no recent release holds its key (zig-build's `cross-manifest.sh key host`: the zig-src pin, the devkit, the host triple and CPU, and the stage scripts), so an unchanged zig-build never rebuilds. Start a run by hand from the Actions tab; `force` rebuilds every host.
