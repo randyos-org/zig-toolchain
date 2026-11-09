@@ -52,6 +52,9 @@ concurrency:
 env:
   # the GitHub mirror of https://codeberg.org/emanspeaks/zig-build, its source
   ZIG_BUILD_URL: https://github.com/randyos-org/zig-build.git
+  # zig-build's ci-sources.sh fetches zig-src (and upstream's release tags) from
+  # here: the GitHub mirror of https://codeberg.org/emanspeaks/zig
+  ZIG_SRC_URL: https://github.com/randyos-org/zig.git
   # the builds move between machines, so they must run on any CPU of their arch
   ZIG_HOST_CPU: baseline
   STAGE3_TESTS: 0
