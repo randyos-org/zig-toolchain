@@ -142,9 +142,22 @@ jobs:
           got=$(bash ./cross-manifest.sh key host)
           [ "$got" = "$WANT" ] || echo "::warning::host key $got on the runner, $WANT in prepare"
 
+      # A host's quirks from targets.json:
+      #   maxrss         passed as --maxrss to both zig builds (build-stage3.sh
+      #                  forwards its arguments), for a runner with less memory
+      #                  than Zig's build declares (8 GB; macos-15 has 7)
+      #   no_pkg_config  a PKG_CONFIG that does not exist, so Zig's build skips
+      #                  pkg-config (windows-11-arm's Strawberry Perl one is broken)
       - name: Build stage3
         working-directory: zig-build
-        run: bash ./build-stage3.sh
+        env:
+          MAXRSS: ${{ matrix.maxrss }}
+          NO_PKG_CONFIG: ${{ matrix.no_pkg_config }}
+        run: |
+          args=()
+          [ -n "$MAXRSS" ] && args+=(--maxrss "$MAXRSS")
+          [ "$NO_PKG_CONFIG" = true ] && export PKG_CONFIG=no-pkg-config
+          bash ./build-stage3.sh "${args[@]}"
 
       # zig-build's test-zig-cross.sh, run natively: the build runs, and it
       # builds and runs a Zig and a C hello world for its own host
