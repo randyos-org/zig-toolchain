@@ -1,6 +1,6 @@
 # zig-toolchain
 
-Builds of the Zig that [zig-build](https://github.com/randyos-org/zig-build) (a mirror of its source on [Codeberg](https://codeberg.org/emanspeaks/zig-build)) pins, for the GitHub-hosted runners, so other projects' CI can test with it without building Zig themselves.
+Builds of the Zig that [zig-build](https://github.com/randyos-org/zig-build) pins, for the GitHub-hosted runners, so other projects' CI can test with it without building Zig themselves.
 
 ## Using it
 

@@ -1,7 +1,6 @@
 name: Build
 
-# Builds the Zig that zig-build pins (https://github.com/randyos-org/zig-build,
-# the mirror of https://codeberg.org/emanspeaks/zig-build)
+# Builds the Zig that zig-build (https://github.com/randyos-org/zig-build) pins
 # natively on each GitHub-hosted runner in targets.json, with zig-build's own
 # scripts: build-stage3.sh bootstraps from that host's devkit, which zig-build
 # picks from zig-devkits' devkits.json.
@@ -51,7 +50,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # the GitHub mirror of https://codeberg.org/emanspeaks/zig-build, its source
   ZIG_BUILD_URL: https://github.com/randyos-org/zig-build.git
   # zig-build's ci-sources.sh fetches zig-src (and upstream's release tags) from
   # here: the GitHub mirror of https://codeberg.org/emanspeaks/zig
