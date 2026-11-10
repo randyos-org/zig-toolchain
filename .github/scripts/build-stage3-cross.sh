@@ -11,7 +11,7 @@ shift 2
 zig=$PWD/bin/stage3/bin/zig
 
 # the target's devkit (zig-build picks it by ZIG_HOST_TARGET; nothing runs it)
-( export ZIG_HOST_TARGET=$target; . ./build-devkit.sh ) || exit 1
+( export ZIG_HOST_TARGET=$target; . ./fetch-devkit.sh ) || exit 1
 devkit=$(export ZIG_HOST_TARGET=$target; . ./common.sh >/dev/null 2>&1; echo "${DEVKIT_WIN:-$DEVKIT}")
 [ -d "$devkit" ] || { echo "no devkit at $devkit" >&2; exit 1; }
 # native zig.exe cannot open msys /c/... paths (common.sh)
