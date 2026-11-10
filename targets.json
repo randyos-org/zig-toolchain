@@ -3,5 +3,6 @@
   { "target": "aarch64-linux-musl", "runner": "ubuntu-24.04-arm", "args": "-j2" },
   { "target": "x86_64-windows-gnu", "runner": "windows-2025" },
   { "target": "aarch64-windows-gnu", "runner": "windows-11-arm", "cross_from": "x86_64-windows-gnu" },
-  { "target": "aarch64-macos-none", "runner": "macos-15", "args": "--maxrss 8000000000" }
+  { "target": "aarch64-macos-none", "runner": "macos-15", "args": "--maxrss 8000000000" },
+  { "target": "x86_64-macos-none", "runner": "macos-15-intel" }
 ]

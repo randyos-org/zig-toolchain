@@ -3,7 +3,8 @@ name: Build
 # Builds the Zig that zig-build pins (https://github.com/randyos-org/zig-build,
 # the mirror of https://codeberg.org/emanspeaks/zig-build)
 # natively on each GitHub-hosted runner in targets.json, with zig-build's own
-# scripts: build-stage3.sh bootstraps from the upstream devkit for that host.
+# scripts: build-stage3.sh bootstraps from that host's devkit, which zig-build
+# picks from zig-devkits' devkits.json.
 # Each build is packaged as a Zig install (bin/ and lib/zig: package.sh) and
 # smoke-tested from the package on its runner (smoke.sh), and every host's
 # build of one version goes into one release, `zig-<version>`, which

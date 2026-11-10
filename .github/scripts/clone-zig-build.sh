@@ -13,4 +13,9 @@ for i in 1 2 3 4 5; do
   sleep $((i * 30))
 done
 git -C "$DIR" checkout --quiet "$REF"
+# zig-build picks each host's devkit (and so its host key) from devkits.json in
+# its zig-devkits submodule, which older zig-build commits lack
+if git -C "$DIR" config -f .gitmodules submodule.zig-devkits.path >/dev/null; then
+  git -C "$DIR" submodule update --quiet --init --filter=blob:none zig-devkits
+fi
 echo "zig-build at $(git -C "$DIR" rev-parse HEAD)"
