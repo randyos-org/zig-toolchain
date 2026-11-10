@@ -44,7 +44,10 @@ runs:
           # the newest release with a build for this host
           tag=""
           for t in $(gh release list -R "$REPO" -L 20 --json tagName -q '.[].tagName | select(startswith("zig-"))'); do
-            if gh release view "$t" -R "$REPO" --json assets -q '.assets[].name' | grep -q "^manifest-$host\.json$"; then
+            # the list first: `gh ... | grep -q` under pipefail fails when grep's
+            # early exit cuts gh off mid-write
+            assets=$(gh release view "$t" -R "$REPO" --json assets -q '.assets[].name')
+            if grep -qx "manifest-$host\.json" <<< "$assets"; then
               tag=$t
               break
             fi
